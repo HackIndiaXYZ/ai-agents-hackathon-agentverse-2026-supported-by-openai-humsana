@@ -30,6 +30,7 @@ carry anything else.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 
 from . import classes, repair
@@ -46,6 +47,11 @@ REFUSED = "REFUSED"
 class Attempt:
     presented: dict
     answer: dict
+
+    def __post_init__(self):
+        # Recorded by value. The agent may mutate the dict it handed us while it decides again,
+        # and a record that changes after the fact is not a record.
+        self.presented = copy.deepcopy(self.presented)
 
     @property
     def cleared(self) -> bool:
