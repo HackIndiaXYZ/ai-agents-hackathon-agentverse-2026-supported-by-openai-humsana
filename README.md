@@ -148,8 +148,8 @@ the decision while reporting a clean check. So the gate splits the refusal in tw
 
 | what drifted | what the gate does |
 | --- | --- |
-| a field the class declares as carrying nothing about the decision | drops or restores it, presents the admissible action, and writes if that clears. One authorization, two checks. |
-| anything else, named in the class or not | substitutes nothing. It hands back the bound, the agent decides again, and the new action is checked from scratch on the same receipt. |
+| a field the action class **explicitly declares safe to change**, because it carries nothing about the decision | drops or restores that field only, presents the admissible action, and writes if that clears. One authorization, two checks. |
+| anything else, whether the class names it or not | substitutes nothing. The agent must recompute its proposal with the authorized value, and the gate checks the new proposal independently, from scratch, on the same receipt. |
 
 The live run, both branches:
 
@@ -238,8 +238,19 @@ Stated so the claims above stay tied to what has actually been run:
 | the MCP wrapper | not built |
 | the recorded demonstration | not recorded, and it will not be recorded until the flow above works reliably |
 
+## Licence and scope
+
+Everything committed here is under the repository's MIT licence, which is the right licence for an
+integration example. The scope is deliberately narrow: there is no Humsana engine code, no signing
+key, no private infrastructure configuration and no customer data in this repository. What is here
+calls the engine over HTTP, which is how a customer would use it, and the engine stays where it is.
+
 ## What this does not do
 
+- It does not enforce a numeric minimum. A number in an authority is a ceiling, so a value
+  expressed as a number may fall. A floor is not something the engine has today, which is why the
+  hiring standard here is bound by name, and why the matrix reports that row as a known gap
+  instead of smoothing over it.
 - It does not perform the action, hold credentials, or call the downstream system. Your
   executor does that, and only after the gate clears it.
 - It does not decide whether an agent is trustworthy, or verify anyone's identity.
