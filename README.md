@@ -88,12 +88,27 @@ Python 3.10 or later.
 python3 -m unittest discover -s tests -t .
 ```
 
-100 tests, all of them about this repository. The boundary is faked, and the fake reproduces the
+107 tests, all of them about this repository. The boundary is faked, and the fake reproduces the
 live engine's comparison field by field, which is what lets the whole authorization matrix run
 with no network. It covers the gate, the repair and the rule that decides whether the gate may
 apply it, the agent loop from proposal to execution, the ledger invariant, the story a person
 reads, the model proposer's request and response handling, and this repository's own promise that
 it carries no credential.
+
+That last one is four layers deep, because a public repository means a committed key is a published
+key: key shapes in the tracked files, the same shapes across every commit, and the values of the
+keys that exist on the machine where the tests run, checked against both. The fourth layer is why
+the guard does not depend on knowing a provider's key format. A scan that cannot run fails rather
+than skipping, because a guard that skips is a guard that lies.
+
+Before a push, run the gate over the whole repository and the suite at once:
+
+```bash
+python3 scripts/preflight.py
+```
+
+It adds the key files a developer has outside the repository, which the test suite deliberately does
+not read, and it prints what it checked. Exit 0 means push. It never prints a value.
 
 **Live. The boundary's own answers, needs a key.** This is the demonstration mode:
 
@@ -344,7 +359,7 @@ Stated so the claims above stay tied to what has actually been run:
 | piece | state |
 | --- | --- |
 | the boundary client, the gate, the repair and its safety rule, the ledger guard | built, and exercised against the live boundary |
-| the authorization matrix and the offline test suite | built: 100 tests, and 12 rows measured against the live service |
+| the authorization matrix and the offline test suite | built: 107 tests, and 12 rows measured against the live service |
 | the proposer interface and the agent loop from proposal to execution | built, and run live end to end by `scripts/demo_agent.py` |
 | the scripted proposer | built, deterministic, and used by the tests and by the demo. It is not the agent |
 | the OpenAI proposer and its tool definitions | built, and covered offline. Not yet run against the live API, because no key exists yet |
