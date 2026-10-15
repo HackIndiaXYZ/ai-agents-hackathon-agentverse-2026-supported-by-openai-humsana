@@ -102,6 +102,8 @@ def main(argv: list[str]) -> int:
             print(f"\nthe refusal is a signed record: {refusal.get('code')} "
                   f"{refusal.get('receipt_id')} issuer {record.get('issuer')} "
                   f"digest {str(record.get('record_digest'))[:24]}")
+    for note in getattr(proposer, "notes", []):
+        print(f"note: {note}")
     rule()
     return 0
 

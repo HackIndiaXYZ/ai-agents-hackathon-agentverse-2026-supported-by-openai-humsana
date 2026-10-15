@@ -145,6 +145,13 @@ deliberately permissive. It shapes the call and does not enforce the authority. 
 only express the authorized values would be a second authorization engine living in a tool
 definition, and the refusal has to come from the boundary, with its own signed record.
 
+The call is forced by default, so the answer arrives as a structured call rather than prose to be
+parsed. That is not universal: an endpoint serving a model in thinking mode refuses a forced choice
+outright, which was measured against a live one rather than guessed. The proposer asks again without
+forcing it, remembers that for the rest of the run, and records it, because a run that quietly
+changed how it asked would be describing something that did not happen. `OPENAI_FORCE_TOOL=0` turns
+forcing off up front.
+
 From the model's side, the refusal is the tool result. It calls the tool with an action, and the tool
 answers that the action was not authorized, that nothing was executed, and what would have been
 accepted instead. Deciding again is then the model's ordinary next turn:

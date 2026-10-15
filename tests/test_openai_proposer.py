@@ -510,5 +510,83 @@ class TestTheKeyIsHandled(unittest.TestCase):
         self.assertIn("[the key]", message, "the key is replaced, not merely trimmed")
 
 
+# ------------------------------------- a forced tool call, and the endpoints that refuse one
+
+class TestTheToolCallIsForcedWhereThatIsAllowed(unittest.TestCase):
+    """Forcing the tool call is right: it makes the answer structured instead of prose.
+
+    It is not universal. An endpoint whose model runs in thinking mode refuses a forced choice
+    outright, which was measured against a live one rather than guessed, so the proposer asks again
+    without forcing it. The fallback is recorded rather than silent, because a demonstration that
+    quietly changed how it asked would be describing something that did not happen.
+    """
+
+    def brief(self):
+        return briefs.hiring_brief(ACTION)
+
+    def test_a_refused_forced_choice_is_asked_again_without_forcing(self):
+        calls = []
+
+        def transport(method, url, headers, payload):
+            calls.append(payload)
+            if len(calls) == 1:
+                raise OpenAIError("the OpenAI API answered 400: Thinking mode does not support "
+                                  "this tool_choice")
+            return answered(proposal_arguments(ON_THE_BAR_WHY))
+
+        proposer = OpenAIProposer(api_key=FAKE_KEY, model=MODEL, transport=transport)
+        proposal = proposer.propose(self.brief())
+        self.assertEqual(proposal.parameters["standard"]["id"], "senior-bar-4yr")
+        self.assertIn("tool_choice", calls[0])
+        self.assertNotIn("tool_choice", calls[1], "the retry must actually stop forcing it")
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(proposer.force_tool, "and it must stay off for the rest of the run")
+        self.assertIn("without forcing", " ".join(proposer.notes))
+
+    def test_the_fallback_is_remembered_across_the_two_turns(self):
+        calls = []
+
+        def transport(method, url, headers, payload):
+            calls.append(payload)
+            if len(calls) == 1:
+                raise OpenAIError("400: Thinking mode does not support this tool_choice")
+            if len(calls) == 2:
+                return answered(proposal_arguments(MID_BAR_WHY, **MID_BAR))
+            return answered(proposal_arguments(ON_THE_BAR_WHY))
+
+        proposer = OpenAIProposer(api_key=FAKE_KEY, model=MODEL, transport=transport)
+        store = Store(os.path.join(tempfile.mkdtemp(), "ledger.jsonl"))
+        gate = Gate(LiveShapedBoundary(), store, ACTION)
+        transcript = run_agent(proposer, gate, self.brief())
+        self.assertTrue(transcript.executed)
+        self.assertNotIn("tool_choice", calls[1])
+        self.assertNotIn("tool_choice", calls[2], "the second turn must not try forcing again")
+        self.assertEqual(len(proposer.notes), 1, "the fallback is recorded once, not once per turn")
+
+    def test_forcing_can_be_turned_off_up_front(self):
+        calls = []
+
+        def transport(method, url, headers, payload):
+            calls.append(payload)
+            return answered(proposal_arguments(ON_THE_BAR_WHY))
+
+        proposer = OpenAIProposer(api_key=FAKE_KEY, model=MODEL, transport=transport,
+                                  force_tool=False)
+        proposer.propose(self.brief())
+        self.assertNotIn("tool_choice", calls[0])
+
+    def test_a_failure_that_is_not_about_forcing_is_not_retried(self):
+        calls = []
+
+        def transport(method, url, headers, payload):
+            calls.append(payload)
+            raise OpenAIError("the OpenAI API answered 500: upstream is unwell")
+
+        proposer = OpenAIProposer(api_key=FAKE_KEY, model=MODEL, transport=transport)
+        with self.assertRaises(OpenAIError):
+            proposer.propose(self.brief())
+        self.assertEqual(len(calls), 1, "an unrelated failure must not be re-sent")
+
+
 if __name__ == "__main__":
     unittest.main()

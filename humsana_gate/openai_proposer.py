@@ -185,7 +185,8 @@ class OpenAIProposer:
     """
 
     def __init__(self, *, model: str | None = None, api_key: str | None = None,
-                 base_url: str | None = None, transport=None, temperature: float = 0.0):
+                 base_url: str | None = None, transport=None, temperature: float = 0.0,
+                 force_tool: bool | None = None):
         self.api_key = (api_key if api_key is not None else os.environ.get("OPENAI_API_KEY", "")).strip()
         if not _looks_like_a_key(self.api_key):
             raise OpenAIError(
@@ -195,6 +196,9 @@ class OpenAIProposer:
         self.model = (model or os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL).strip()
         self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         self.temperature = temperature
+        self.force_tool = (force_tool if force_tool is not None
+                           else os.environ.get("OPENAI_FORCE_TOOL", "1") != "0")
+        self.notes: list[str] = []
         self.name = f"openai:{self.model}"
         self._transport = transport
         self._messages: list[dict] = []
@@ -258,16 +262,35 @@ class OpenAIProposer:
     def _post(self, payload: dict) -> dict:
         return self._call("POST", "/chat/completions", payload)
 
-    def _ask(self, tools: list[dict]) -> tuple[dict, str]:
+    def _ask(self, tools: list[dict], *, force: bool | None = None) -> tuple[dict, str]:
+        """Ask once, and if the endpoint refuses a forced tool call, ask again without forcing it.
+
+        A forced choice is the right default: it makes the answer a structured call instead of prose
+        to be parsed. It is not universal, and the exception is not hypothetical. An endpoint serving
+        a model in thinking mode refuses it outright, which was measured against a live one. So the
+        proposer asks again without forcing, remembers that for the rest of the run, and records it,
+        because a demonstration that quietly changed how it asked would be describing something that
+        did not happen.
+        """
+        force = self.force_tool if force is None else force
         # The messages go out as a snapshot, not as a live view: this conversation keeps growing
         # while the run goes on, and a request that changes after it was sent is not a record of
         # what was sent.
         payload = {"model": self.model,
                    "messages": [dict(message) for message in self._messages],
                    "tools": tools,
-                   "tool_choice": {"type": "function", "function": {"name": TOOL_NAME}},
                    "temperature": self.temperature}
-        answer = self._post(payload)
+        if force:
+            payload["tool_choice"] = {"type": "function", "function": {"name": TOOL_NAME}}
+        try:
+            answer = self._post(payload)
+        except OpenAIError as error:
+            if force and "tool_choice" in str(error):
+                self.force_tool = False
+                self.notes.append("this endpoint refused a forced tool call, so the tool is now "
+                                  "asked for without forcing it")
+                return self._ask(tools, force=False)
+            raise
         choices = answer.get("choices") or []
         if not choices:
             raise OpenAIError(f"the model returned no choices: {json.dumps(answer)[:300]}")
