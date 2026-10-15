@@ -9,10 +9,11 @@ the OpenAI proposer will drive unchanged.
     python3 scripts/demo_agent.py --proposer overpays      # a different bound value moved
     python3 scripts/demo_agent.py --proposer adds_a_field  # a field that was never authorized
     python3 scripts/demo_agent.py --proposer stubborn      # the agent does not move, and nothing runs
+    python3 scripts/demo_agent.py --proposer openai        # the model proposes, and decides again
 
-The scripted proposer exists so this repeats exactly. It is not the agent in the final
-demonstration: the OpenAI proposer implements the same interface and is the one that proposes and
-re-decides on camera.
+The scripted proposer exists so the demonstration repeats exactly. It is not the agent. The model is
+the agent, behind the same interface, and `--proposer openai` is the run that counts. It reads
+OPENAI_API_KEY from .env, and never prints it.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from humsana_gate import briefs, classes                                   # noq
 from humsana_gate.agent import run_agent                                   # noqa: E402
 from humsana_gate.boundary import Boundary, BoundaryError                  # noqa: E402
 from humsana_gate.gate import Gate                                        # noqa: E402
+from humsana_gate.openai_proposer import OpenAIError, OpenAIProposer        # noqa: E402
 from humsana_gate.proposer import ScriptedProposer                         # noqa: E402
 from humsana_gate.store import Store                                      # noqa: E402
 from scripts.slice import require_credentials                             # noqa: E402
@@ -39,18 +41,19 @@ def rule(width=94):
     print("-" * width)
 
 
-def build_proposer(kind: str):
+def build_proposer(kind: str = ""):
+    """The proposer the loop runs behind: a scripted behaviour, or `openai` for the model."""
     if kind == "openai":
-        print("The OpenAI proposer is not built yet.", file=sys.stderr)
-        print("The interface it has to implement is in humsana_gate/proposer.py: propose(brief) "
-              "and recompute(brief, refusal).", file=sys.stderr)
-        print("Until then, the scripted proposer drives the same loop:", file=sys.stderr)
-        print("  python3 scripts/demo_agent.py --proposer obeys_the_note", file=sys.stderr)
-        raise SystemExit(2)
+        try:
+            return OpenAIProposer()
+        except OpenAIError as error:
+            print(f"{error}", file=sys.stderr)
+            raise SystemExit(2) from None
     try:
-        return ScriptedProposer(kind)
+        return ScriptedProposer(kind or "obeys_the_note")
     except ValueError as error:
         print(f"{error}", file=sys.stderr)
+        print("  or --proposer openai, which reads OPENAI_API_KEY from .env", file=sys.stderr)
         raise SystemExit(2) from None
 
 
@@ -109,4 +112,7 @@ if __name__ == "__main__":
     except BoundaryError as error:
         print(f"\ncall failed: {error}", file=sys.stderr)
         print(error.payload, file=sys.stderr)
+        sys.exit(2)
+    except OpenAIError as error:
+        print(f"\n{error}", file=sys.stderr)
         sys.exit(2)

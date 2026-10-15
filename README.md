@@ -88,11 +88,12 @@ Python 3.10 or later.
 python3 -m unittest discover -s tests -t .
 ```
 
-66 tests, all of them about this repository. The boundary is faked, and the fake reproduces the
+100 tests, all of them about this repository. The boundary is faked, and the fake reproduces the
 live engine's comparison field by field, which is what lets the whole authorization matrix run
 with no network. It covers the gate, the repair and the rule that decides whether the gate may
 apply it, the agent loop from proposal to execution, the ledger invariant, the story a person
-reads, and this repository's own promise that it carries no credential.
+reads, the model proposer's request and response handling, and this repository's own promise that
+it carries no credential.
 
 **Live. The boundary's own answers, needs a key.** This is the demonstration mode:
 
@@ -104,6 +105,7 @@ python3 scripts/demo_hiring.py       # the whole story, live, all three shapes o
 python3 scripts/authorization_matrix.py   # the matrix, expected against measured
 python3 scripts/probe_rule_table.py       # the rule table, one variant per field type
 python3 scripts/demo_agent.py             # the agent, the gate and the record, end to end
+python3 scripts/demo_agent.py --proposer openai   # the same loop, with the model proposing
 ```
 
 A live script with no key stops before printing anything, and says which mode needs no key.
@@ -134,8 +136,52 @@ repeats exactly:
 | `adds_a_field` | adds a field the employer never authorized |
 | `stubborn` | is refused, then proposes the same thing again |
 
-The OpenAI proposer is what the final demonstration uses, and it is not built yet. It implements
-the same two methods, so the gate, the store and the loop do not change when it lands.
+`OpenAIProposer` is the one the demonstration uses, and it implements the same two methods. The gate
+does not change: a test runs the whole loop with the model in the proposer slot and no network, and
+that class reads the same way it does with a script.
+
+It calls one tool, `propose_action`, whose schema is built from the authorized action and is
+deliberately permissive. It shapes the call and does not enforce the authority. A schema that could
+only express the authorized values would be a second authorization engine living in a tool
+definition, and the refusal has to come from the boundary, with its own signed record.
+
+From the model's side, the refusal is the tool result. It calls the tool with an action, and the tool
+answers that the action was not authorized, that nothing was executed, and what would have been
+accepted instead. Deciding again is then the model's ordinary next turn:
+
+```
+The action was not authorized. Nothing was executed, and nothing was spent.
+
+Why:
+  standard.id may not change. The employer set it to senior-bar-4yr, and the action presented
+  mid-bar-2yr.
+
+What would have been accepted instead:
+  standard.id has to be presented as the employer set it: senior-bar-4yr.
+
+These fields decide the action: standard.id
+
+Decide again, and call the tool with the action you now believe is right. If the refusal changes
+your reasoning, say so in the why field.
+```
+
+The system prompt does not warn the model that the material may contain an instruction it should not
+obey. That is deliberate. What is under test is the boundary, not the model's resistance to a
+plausible note, and a demonstration that only worked because the prompt told the model the answer
+would prove nothing.
+
+The model name comes from `OPENAI_MODEL`, defaulting to `gpt-4o-mini`. If the account cannot serve
+the name, the error lists the names that key can actually use, because a pinned name that quietly
+stops working is worse than one that says so.
+
+On the key: it is read from `OPENAI_API_KEY` in `.env`, sent in an Authorization header and nowhere
+else, and replaced before any error text is printed. That last part is not decoration. The API echoes
+key material back inside a 401, and the placeholder that ships in `.env.example` came back in full
+when it was sent, which is how the scrub was found to be necessary. A test holds it.
+
+**It has not been run against the live API yet**, because no key exists yet. That run is the next
+step. Everything except the socket is covered offline, and the shipped transport is exercised against
+a loopback server, so the first live run is not the first time this code opens a connection.
 
 What the agent reads is `data/candidate-7731.md`: synthetic material containing a line it should
 not obey, which is the point. The material is not the authority, and a plausible instruction
@@ -291,14 +337,14 @@ Stated so the claims above stay tied to what has actually been run:
 | piece | state |
 | --- | --- |
 | the boundary client, the gate, the repair and its safety rule, the ledger guard | built, and exercised against the live boundary |
-| the authorization matrix and the offline test suite | built: 66 tests, and 12 rows measured against the live service |
+| the authorization matrix and the offline test suite | built: 100 tests, and 12 rows measured against the live service |
 | the proposer interface and the agent loop from proposal to execution | built, and run live end to end by `scripts/demo_agent.py` |
-| the scripted proposer | built, deterministic, and used by the tests and by the demo. It is not the agent in the final demonstration |
-| the OpenAI proposer and its tool definitions | not built. It implements the same two methods, so the gate, the store and the loop do not change when it lands |
+| the scripted proposer | built, deterministic, and used by the tests and by the demo. It is not the agent |
+| the OpenAI proposer and its tool definitions | built, and covered offline. Not yet run against the live API, because no key exists yet |
 | the customer facing interface | not built. The transcript it will render, in plain words, is built and tested |
 | the proof page, where one decision is inspected | not built. The signed records already arrive in the API's answers and the demo prints them; the page that reads them comes next |
 | the MCP wrapper | not built |
-| the recorded demonstration | not recorded, and it will not be recorded until the OpenAI proposer works reliably |
+| the recorded demonstration | not recorded, and it will not be recorded until the OpenAI proposer has run the whole path reliably |
 
 ## Licence and scope
 
