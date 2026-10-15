@@ -76,13 +76,57 @@ does not know which domain it is in.
 ## Prove it in one command
 
 ```bash
-python3 scripts/issue_key.py --save   # asks for a key and writes it to .env, mode 600
-python3 scripts/slice.py              # the whole spine, live, against api.humsana.com
+python3 scripts/issue_key.py --save           # asks for a key and writes it to .env, mode 600
+python3 scripts/slice.py                      # the spine: authorize, execute once, refuse a move
+python3 scripts/demo_hiring.py                # the whole story, refusal, repair and write
+python3 -m unittest discover -s tests -t .    # this repository's own behaviour, no network
 ```
 
-The slice authorizes a hiring action, executes it once, then presents the same action with the
-standard lowered from 4 years to 3 and shows the refusal. Pass an action class name to run it
-against another domain: `python3 scripts/slice.py infra.deploy_change`.
+`slice.py` authorizes a hiring action, executes it once, then presents the same action with a
+bound value moved and shows the refusal. Name an action class to run it in another domain:
+`python3 scripts/slice.py infra.deploy_change`. `probe_rule_table.py` measures the rule table
+against the live service, one variant per field type.
+
+## When it refuses, the agent does not have to stop
+
+A refusal names the field, both values and the rule, which is everything needed to compute what
+may be presented instead. That computation is deterministic: the rule names the field and the
+field has one authorized value. No model is involved, and the repair can only ever narrow. For
+each drifted field `repair.py` publishes the bound:
+
+| the rule | the bound it publishes |
+| --- | --- |
+| `MAY_NOT_CHANGE` | `equals` the authorized value |
+| `MAY_NOT_INCREASE` | `at_most` the authorized value |
+| `MAY_ONLY_SHRINK` | `subset_of` the authorized list |
+| `MAY_NOT_GROW` | `must_be_absent` |
+
+A refusal spends nothing, so the corrected action runs under the authorization the human
+already gave, and the record shows the attempt, the refusal and the correction as one story.
+The live run:
+
+```
+refused      EFFECTUATION_DRIFT   parameters.standard.id   senior-bar-4yr -> mid-bar-2yr
+admissible   standard.id: MAY_NOT_CHANGE -> equals 'senior-bar-4yr'
+the gate again, the same authorization:
+             code MATCHED   matched True   consumed True
+```
+
+This is not a second authorization engine and it decides nothing. It reads the boundary's own
+answer, and the corrected action must still clear the boundary before anything is written.
+
+## The write
+
+`store.py` is the demo's downstream system, an append-only JSON-lines ledger. It cannot be
+written without a clearance, and a clearance exists only for an answer in which the boundary
+cleared the action and spent the authorization. A refusal cannot mint one.
+`tests/test_gate.py` proves both halves, and the ledger file can be read directly rather than
+believed from the screen.
+
+That guard makes an accidental bypass impossible and a deliberate one a matter of importing a
+private name, which is the right level for a store sitting in the same process as its gate. A
+real deployment puts the downstream system behind its own process or its own credential, and
+then the guard is a network boundary as well.
 
 ## Credentials
 
