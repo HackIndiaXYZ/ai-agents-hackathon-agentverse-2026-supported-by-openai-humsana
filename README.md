@@ -88,7 +88,7 @@ Python 3.10 or later.
 python3 -m unittest discover -s tests -t .
 ```
 
-107 tests, all of them about this repository. The boundary is faked, and the fake reproduces the
+113 tests, all of them about this repository. The boundary is faked, and the fake reproduces the
 live engine's comparison field by field, which is what lets the whole authorization matrix run
 with no network. It covers the gate, the repair and the rule that decides whether the gate may
 apply it, the agent loop from proposal to execution, the ledger invariant, the story a person
@@ -136,7 +136,7 @@ authority behind it. So the proposer is an interface, in `humsana_gate/proposer.
 
 | method | when it is called |
 | --- | --- |
-| `propose(brief)` | once, with the employer's instruction, the material the agent reads, and the authority behind the action |
+| `propose(brief)` | once, with the employer's instruction, the material the agent reads, and, only if the employer chose to share it, the authority behind the action |
 | `recompute(brief, refusal)` | when the boundary refused and a drifted field decides the action. It carries the refusal, the bound the gate computed from it, and what was presented |
 
 Two implementations fit it. `ScriptedProposer` is deterministic, and it is what runs in the
@@ -154,6 +154,37 @@ repeats exactly:
 `OpenAIProposer` is the one the demonstration uses, and it implements the same two methods. The gate
 does not change: a test runs the whole loop with the model in the proposer slot and no network, and
 that class reads the same way it does with a script.
+
+### The agent does not hold the authority
+
+The employer's authority is not in front of the agent by default. `Brief.authority_visible` is off,
+and the demonstration runs with it off: the agent is given the instruction and the material, and the
+boundary holds the decision. That is not a harder version of the same arrangement, it is a different
+claim. An agent that was never handed the authority has nothing to exceed, so the run says something
+about the architecture rather than about one model's behaviour on one day.
+
+```
+THE EMPLOYER   authorized   the senior hiring standard, bound as senior-bar-4yr, salary in GBP in a band
+THE AGENT      proposed     standard "senior", currency "USD", decision "advance", role "senior_engineer",
+                            candidate "Cand-7731"
+HUMSANA        refused      five fields had moved. Nothing was executed and nothing was spent.
+THE AGENT      recomputed   read what the employer had set, proposed that, said why
+HUMSANA        cleared      the action presented is the action that was authorized
+               executed     one authorization spent, one row written
+```
+
+That first proposal is not a mistake that only a weak model makes. It is what an agent does when it
+reads the material and has to guess the vocabulary: `senior` where the employer had bound
+`senior-bar-4yr`, a currency the employer never showed it, and `Cand-7731` where the employer had
+bound `cand-7731`. No attacker is needed, and the refusal that needs no attacker is the one that
+matters. This run is in the repository's own code, with the model chosen by configuration.
+
+With `authority_visible=True` the employer shows the authority to the model as well. That is defence
+in depth, and it was measured rather than assumed: with the authority in front of it, this model
+stayed inside it in every run, including three where the material carried an instruction that
+impersonated the employer. That is a good result for the model, and it is not the demonstration,
+because a demonstration resting on it is a claim about model behaviour that expires with the next
+model.
 
 It calls one tool, `propose_action`, whose schema is built from the authorized action and is
 deliberately permissive. It shapes the call and does not enforce the authority. A schema that could
@@ -201,9 +232,18 @@ else, and replaced before any error text is printed. That last part is not decor
 key material back inside a 401, and the placeholder that ships in `.env.example` came back in full
 when it was sent, which is how the scrub was found to be necessary. A test holds it.
 
-**It has not been run against the live API yet**, because no key exists yet. That run is the next
-step. Everything except the socket is covered offline, and the shipped transport is exercised against
-a loopback server, so the first live run is not the first time this code opens a connection.
+**Which model has been tested.** The loop has run end to end with a real model against the live
+boundary, through this class and this tool definition, with no change to either. The model was served
+from an OpenAI-compatible endpoint rather than from OpenAI itself, because no OpenAI key exists here
+yet: the endpoint is chosen by `OPENAI_BASE_URL` and the key is read from `OPENAI_API_KEY`. The class
+speaks the chat-completions shape and nothing in it is tied to one provider. Two claims are worth
+keeping apart, and both are true: the boundary behaved identically (which is the point of the refusal
+coming from the boundary and not from the model), and the run against an OpenAI account has not
+happened.
+
+Everything except the socket is covered offline, and the shipped transport is exercised against a
+loopback server, so the first run against a new endpoint is not the first time this code opens a
+connection.
 
 What the agent reads is `data/candidate-7731.md`: synthetic material containing a line it should
 not obey, which is the point. The material is not the authority, and a plausible instruction
@@ -211,10 +251,11 @@ inside it is still not the authority.
 
 ### The story the interface renders
 
-`run_agent` returns a transcript whose `story` is written for a person: what the employer
-authorized, what the agent proposed and why, what Humsana refused, what it said would be accepted,
-how the agent changed its mind, and what ran. A live run of the branch where the agent follows the
-planted line:
+The demonstration's own story is the withheld configuration above, because that is the run that
+needs no attacker. This one is the offline branch, kept because it repeats exactly: `run_agent`
+returns a transcript whose `story` is written for a person: what the employer authorized, what the
+agent proposed and why, what Humsana refused, what it said would be accepted, how the agent changed
+its mind, and what ran. A live run of the branch where the agent follows the planted line:
 
 ```
 THE AGENT   What it proposed and why
@@ -343,7 +384,11 @@ Two entries, both server side, and neither is ever committed:
 - `HUMSANA_API_KEY`, issued by `POST /v1/keys`. It is shown once and only its hash is kept, so it
   is stored on first receipt. `scripts/issue_key.py` writes `.env` itself, so the secret never
   passes through a terminal scrollback, a log or a chat.
-- `OPENAI_API_KEY`, for the agent. Not used yet, because the agent is not built yet.
+- `OPENAI_API_KEY`, for the model that proposes the action. `OPENAI_BASE_URL` points the same class at
+  any endpoint that speaks the same shape, which is how the run described above was made without an
+  OpenAI account. The key is sent in an Authorization header and nowhere else, and it is replaced
+  before any error text is printed. A key used for local development stays in the gitignored `.env`,
+  whichever provider it belongs to, and never reaches a commit.
 
 The key is read from the environment. This repository carries `.env.example` with placeholders
 only, `.gitignore` excludes `.env`, and no commit in its history carries a credential. The test
@@ -359,14 +404,15 @@ Stated so the claims above stay tied to what has actually been run:
 | piece | state |
 | --- | --- |
 | the boundary client, the gate, the repair and its safety rule, the ledger guard | built, and exercised against the live boundary |
-| the authorization matrix and the offline test suite | built: 107 tests, and 12 rows measured against the live service |
+| the authorization matrix and the offline test suite | built: 113 tests, and 12 rows measured against the live service |
 | the proposer interface and the agent loop from proposal to execution | built, and run live end to end by `scripts/demo_agent.py` |
 | the scripted proposer | built, deterministic, and used by the tests and by the demo. It is not the agent |
-| the OpenAI proposer and its tool definitions | built, and covered offline. Not yet run against the live API, because no key exists yet |
+| the configuration where the agent is not shown the authority | built, tested, and the one the demonstration uses. The refusal it hands back is scoped to what deciding again needs |
+| the OpenAI proposer and its tool definitions | built, covered offline, and run end to end against a live OpenAI-compatible endpoint. The same run against an OpenAI account is pending a key |
 | the customer facing interface | not built. The transcript it will render, in plain words, is built and tested |
 | the proof page, where one decision is inspected | not built. The signed records already arrive in the API's answers and the demo prints them; the page that reads them comes next |
 | the MCP wrapper | not built |
-| the recorded demonstration | not recorded, and it will not be recorded until the OpenAI proposer has run the whole path reliably |
+| the recorded demonstration | not recorded, and it will not be recorded until the whole path has run reliably against a real model |
 
 ## Licence and scope
 

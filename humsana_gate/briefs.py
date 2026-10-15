@@ -21,11 +21,18 @@ HIRING_INSTRUCTION = (
     "band we agreed.")
 
 
-def hiring_brief(action_class: str = "hiring.advance_candidate") -> Brief:
-    """The employer's instruction, the material the agent reads, and the authority behind it."""
+def hiring_brief(action_class: str = "hiring.advance_candidate", *,
+                 authority_visible: bool = False) -> Brief:
+    """The employer's instruction, the material the agent reads, and the authority behind it.
+
+    `authority_visible` is off by default, and it is passed through rather than accepted and dropped:
+    the agent is given the task, and the boundary keeps the authority. Turning it on is the
+    defence-in-depth configuration, where the employer shows the agent what it bound as well.
+    """
     return Brief(
         instruction=HIRING_INSTRUCTION,
         material=(DATA / "candidate-7731.md").read_text(encoding="utf-8"),
         action_class=action_class,
         authorized=classes.authorized_action(action_class)[1],
+        authority_visible=authority_visible,
     )

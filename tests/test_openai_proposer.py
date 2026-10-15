@@ -151,14 +151,36 @@ class TestTheRequestItBuilds(unittest.TestCase):
         self.proposer = OpenAIProposer(api_key=FAKE_KEY, model=MODEL, transport=self.stub)
         self.brief = briefs.hiring_brief(ACTION)
 
-    def test_the_request_carries_the_instruction_the_authority_and_the_material(self):
+    def test_without_the_authority_the_request_carries_the_instruction_and_the_material(self):
+        # The default configuration, and the one the demonstration uses: the employer's decision is
+        # not shown to the agent, so there is nothing for the agent to copy and nothing to exceed.
         self.proposer.propose(self.brief)
         system, user = self.stub.messages()
         self.assertEqual(system["role"], "system")
+        self.assertEqual(system["content"], SYSTEM, "the withheld configuration has its own prompt")
+        self.assertIn(self.brief.instruction, user["content"])
+        self.assertIn("mid-level bar", user["content"], "the material reaches the model unedited")
+        self.assertNotIn("THE AUTHORITY BEHIND THIS ACTION", user["content"])
+        self.assertNotIn("senior-bar-4yr", user["content"],
+                         "the employer's authority is the boundary's to hold and to give back")
+
+    def test_with_the_authority_shown_the_request_carries_it(self):
+        # The defence-in-depth configuration, off unless the employer turns it on.
+        self.proposer.propose(briefs.hiring_brief(ACTION, authority_visible=True))
+        system, user = self.stub.messages()
         self.assertIn(self.brief.instruction, user["content"])
         self.assertIn("senior-bar-4yr", user["content"])
         self.assertIn("THE AUTHORITY BEHIND THIS ACTION", user["content"])
         self.assertIn("mid-level bar", user["content"], "the material reaches the model unedited")
+        self.assertTrue(system["content"].startswith(SYSTEM))
+        self.assertIn("reproduced in the message", system["content"])
+
+    def test_the_default_is_to_withhold_the_authority(self):
+        self.assertFalse(briefs.hiring_brief(ACTION).authority_visible,
+                         "an agent should hold the task, not the authority behind it")
+        self.proposer.propose(self.brief)
+        self.assertEqual(self.proposer.name, f"openai:{MODEL} (authority withheld)",
+                         "the run says which configuration produced it")
 
     def test_the_model_is_forced_to_call_the_tool(self):
         self.proposer.propose(self.brief)
@@ -197,7 +219,7 @@ class TestTurningAnAnswerIntoAProposal(unittest.TestCase):
         self.assertEqual(proposal.parameters["standard"]["id"], "mid-bar-2yr")
         self.assertEqual(proposal.parameters["salary"]["value"], authorized()["salary"]["value"])
         self.assertEqual(proposal.reasoning, "because.")
-        self.assertEqual(proposal.source, f"openai:{MODEL}")
+        self.assertEqual(proposal.source, f"openai:{MODEL} (authority withheld)")
 
     def test_the_why_field_is_not_part_of_the_action(self):
         proposal = self.propose_with(answered(proposal_arguments("because.", **MID_BAR)))
@@ -236,6 +258,67 @@ class TestTurningAnAnswerIntoAProposal(unittest.TestCase):
             OpenAIProposer(api_key="", transport=stub)
         self.assertIn("OPENAI_API_KEY", str(caught.exception))
         self.assertEqual(stub.requests, [], "nothing should be sent without a key")
+
+
+# ------------------------------------------------- what a refusal is allowed to tell the agent
+
+class TestTheRefusalTheModelSeesIsScoped(unittest.TestCase):
+    """A refusal tells the agent what it needs in order to decide again, and nothing else.
+
+    The boundary's answer carries its receipt, its issuer and the digest of the record it checked
+    against. None of that belongs to the agent, and a refusal that passed it along would be handing
+    the agent the authority it was just denied.
+    """
+
+    def refusal(self):
+        answer = {
+            "code": "EFFECTUATION_DRIFT",
+            "receipt_id": "sh_9f3c1a70b244",
+            "purpose": "advance a candidate in the hiring round",
+            "authorization_record": {
+                "issuer": {"name": "Humsana", "key_id": "k_2b91"},
+                "record_digest": "7c1d0f5e8a92b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"},
+            "drift": [{"field": "parameters.standard.id", "authorized": "senior-bar-4yr",
+                       "final": "senior", "rule": "MAY_NOT_CHANGE"},
+                      {"field": "parameters.salary.currency", "authorized": "INR",
+                       "final": "USD", "rule": "MAY_NOT_CHANGE"}],
+        }
+        bound = ({"field": "parameters.standard.id", "equals": "senior-bar-4yr"},
+                 {"field": "parameters.salary.currency", "equals": "INR"},
+                 {"field": "parameters.decision", "equals": "advance"},
+                 {"field": "parameters.salary.value", "at_most": 2600000})
+        return Refusal(answer=answer, bound=bound, requires_recompute=("standard.id",),
+                       proposed={"standard": {"id": "senior"}})
+
+    def test_the_receipt_and_the_issuer_never_reach_the_model(self):
+        refusal = self.refusal()
+        view = json.dumps(refusal.for_the_agent())
+        content = refusal_text(refusal)
+        for withheld in ("sh_9f3c1a70b244", "k_2b91", "Humsana", "7c1d0f5e8a92", "receipt_id",
+                         "authorization_record", "EFFECTUATION_DRIFT"):
+            self.assertNotIn(withheld, view, f"{withheld} is in the view the agent is given")
+            self.assertNotIn(withheld, content, f"{withheld} reached the model")
+
+    def test_only_the_fields_that_moved_are_described(self):
+        content = refusal_text(self.refusal())
+        self.assertIn("standard.id", content)
+        self.assertIn("senior-bar-4yr", content, "the field that moved, and what the employer had set")
+        self.assertNotIn("salary.value", content, "a field that did not move is not the agent's business")
+        self.assertNotIn("2600000", content)
+        self.assertNotIn("decision", content)
+        self.assertNotIn("parameters.", content)
+
+    def test_the_view_is_a_whitelist_rather_than_a_copy(self):
+        # If the boundary's answer grows a field later, this must not start handing it to a model.
+        view = self.refusal().for_the_agent()
+        self.assertEqual(sorted(view["drift"][0]), ["authorized", "field", "final", "rule"])
+        self.assertEqual([entry["field"] for entry in view["bound"]],
+                         ["parameters.standard.id", "parameters.salary.currency"])
+        self.assertNotIn("purpose", json.dumps(view))
+
+    def test_the_bound_carries_only_what_a_bound_can_bind(self):
+        for entry in self.refusal().for_the_agent()["bound"]:
+            self.assertTrue(set(entry) <= {"field", "equals", "at_most", "subset_of", "must_be_absent"})
 
 
 # ------------------------------------------------------------------ deciding again
@@ -290,7 +373,7 @@ class TestDecidingAgain(unittest.TestCase):
         proposal = self.recomputed()
         self.assertEqual(proposal.parameters["standard"]["id"], "senior-bar-4yr")
         self.assertEqual(proposal.reasoning, ON_THE_BAR_WHY)
-        self.assertEqual(proposal.source, f"openai:{MODEL}",
+        self.assertEqual(proposal.source, f"openai:{MODEL} (authority withheld)",
                          "the correction is the model's, not the gate's")
 
     def test_the_model_keeps_its_own_earlier_reasoning_in_the_conversation(self):
@@ -487,7 +570,7 @@ class TestTheKeyIsHandled(unittest.TestCase):
         with self.assertRaises(OpenAIError) as caught:
             OpenAIProposer(api_key="replace_me", transport=stub)
         message = str(caught.exception)
-        self.assertIn("No usable OpenAI key", message)
+        self.assertIn("No usable key for the model endpoint", message)
         self.assertIn("placeholder", message)
         self.assertEqual(stub.requests, [], "a placeholder must never be sent anywhere")
 

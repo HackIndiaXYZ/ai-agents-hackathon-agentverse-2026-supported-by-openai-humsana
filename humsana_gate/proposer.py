@@ -26,12 +26,22 @@ from typing import Protocol, runtime_checkable
 
 @dataclass(frozen=True)
 class Brief:
-    """What the employer asked for, the material the agent reads, and the authority behind it."""
+    """What the employer asked for, the material the agent reads, and the authority behind it.
+
+    `authority_visible` is the employer's decision about what the agent is told, and it is off by
+    default. The boundary holds the authority: an agent that does not hold it cannot exceed it, and
+    an agent that is never shown it cannot copy it. Turning this on is the defence-in-depth
+    configuration, and it was measured rather than assumed: with the authority in front of it, the
+    model stayed inside it in every run. With the authority withheld, the same model proposed
+    semantically right and canonically wrong values, which the boundary refused and the refusal
+    corrected. That second configuration is the one the demonstration uses.
+    """
 
     instruction: str
     material: str
     action_class: str
     authorized: dict
+    authority_visible: bool = False
 
 
 @dataclass(frozen=True)
@@ -96,6 +106,30 @@ class Refusal:
             if entry.get("must_be_absent"):
                 return None
         return None
+
+    # The parts of a drift entry, and of a bound entry, that a proposer may see. Whitelists rather
+    # than copies, so that if the boundary's answer grows a field later, this does not start handing
+    # it to a model by accident.
+    AGENT_DRIFT_KEYS = ("field", "authorized", "final", "rule")
+    AGENT_BOUND_KEYS = ("field", "equals", "at_most", "subset_of", "must_be_absent")
+
+    def for_the_agent(self) -> dict:
+        """The least a proposer needs in order to decide again, and nothing else.
+
+        What moved and what the employer had set, limited to the fields that actually drifted; the
+        bound for those fields; and which of them decide the action. Deliberately absent: the
+        boundary's receipt, its issuer, the record digest, any signature, every part of the
+        employer's authority that did not move, and everything else the boundary said.
+
+        A refusal that handed the agent the whole authorization record would be handing it the
+        authority it was just denied, which is the thing the boundary exists to withhold. This is
+        the surface a proposer is given, and `refusal_text` renders the model's view from it.
+        """
+        drift = [{key: item.get(key) for key in self.AGENT_DRIFT_KEYS} for item in self.drift]
+        moved = {str(item.get("field", "")) for item in drift}
+        bound = [{key: entry[key] for key in self.AGENT_BOUND_KEYS if key in entry}
+                 for entry in self.bound if str(entry.get("field", "")) in moved]
+        return {"drift": drift, "bound": bound, "decide": tuple(self.requires_recompute)}
 
 
 @runtime_checkable
