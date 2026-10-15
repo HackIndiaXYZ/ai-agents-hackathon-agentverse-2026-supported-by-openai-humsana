@@ -76,20 +76,40 @@ does not know which domain it is in.
 Each class also declares which of its fields **decide** the action. That is the customer's domain
 knowledge, and it is what stops a corrected payload from standing in for a corrected decision.
 
-## Prove it in one command
+## Running it, in two modes
+
+The repository is meant to be understood and exercised without talking to anyone first, so there
+are two clearly separate modes. Nothing needs installing: the standard library is enough, on
+Python 3.10 or later.
+
+**Offline. No network, no key.** A reviewer can run this in the first minute:
 
 ```bash
-python3 scripts/issue_key.py --save           # asks for a key and writes it to .env, mode 600
-python3 scripts/slice.py                      # the spine: authorize, execute once, refuse a move
-python3 scripts/demo_hiring.py                # the whole story, live, all three shapes of drift
-python3 scripts/authorization_matrix.py       # the whole matrix, expected against measured
-python3 -m unittest discover -s tests -t .    # this repository's own behaviour, no network
+python3 -m unittest discover -s tests -t .
 ```
+
+35 tests, all of them about this repository. The boundary is faked, and the fake reproduces the
+live engine's comparison field by field, which is what lets the whole authorization matrix run
+with no network. It covers the gate, the repair and the rule that decides whether the gate may
+apply it, the ledger invariant, and every row of the matrix ending in the status it must reach and
+the ledger it must leave behind.
+
+**Live. The boundary's own answers, needs a key.** This is the demonstration mode:
+
+```bash
+cp .env.example .env                 # then put a key in it, or issue one:
+python3 scripts/issue_key.py --save  # asks for a key and writes .env itself, mode 600
+python3 scripts/slice.py             # the spine: authorize, execute once, refuse a move
+python3 scripts/demo_hiring.py       # the whole story, live, all three shapes of drift
+python3 scripts/authorization_matrix.py   # the matrix, expected against measured
+python3 scripts/probe_rule_table.py       # the rule table, one variant per field type
+```
+
+A live script with no key stops before printing anything, and says which mode needs no key.
 
 `slice.py` authorizes a hiring action, executes it once, then presents the same action with a
 bound value moved and shows the refusal. Name an action class to run it in another domain:
-`python3 scripts/slice.py infra.deploy_change`. `probe_rule_table.py` measures the rule table one
-variant per field type; `authorization_matrix.py` measures whole actions, and is described below.
+`python3 scripts/slice.py infra.deploy_change`.
 
 ## When it refuses, the agent does not have to stop
 
@@ -190,12 +210,33 @@ then the guard is a network boundary as well.
 
 ## Credentials
 
-`POST /v1/keys` issues a key. It is shown once and only its hash is kept, so it is stored on
-first receipt. `scripts/issue_key.py` writes `.env` itself, so the secret never passes through
-a terminal scrollback, a log or a chat.
+Two entries, both server side, and neither is ever committed:
 
-The key is read from `HUMSANA_API_KEY`. This repository carries `.env.example` with
-placeholders only, and `.gitignore` excludes `.env`.
+- `HUMSANA_API_KEY`, issued by `POST /v1/keys`. It is shown once and only its hash is kept, so it
+  is stored on first receipt. `scripts/issue_key.py` writes `.env` itself, so the secret never
+  passes through a terminal scrollback, a log or a chat.
+- `OPENAI_API_KEY`, for the agent. Not used yet, because the agent is not built yet.
+
+The key is read from the environment. This repository carries `.env.example` with placeholders
+only, `.gitignore` excludes `.env`, and no commit in its history carries a credential. The test
+suite reads none of this: it runs from a fresh clone with no `.env` at all.
+
+If a hosted demonstration is added later, both keys stay on the server. The browser receives
+decisions and records, never a credential.
+
+## What is not built yet
+
+Stated so the claims above stay tied to what has actually been run:
+
+| piece | state |
+| --- | --- |
+| the boundary client, the gate, the repair and its safety rule, the ledger guard | built, and exercised against the live boundary |
+| the authorization matrix and the offline test suite | built: 35 tests, and 12 rows measured against the live service |
+| the OpenAI agent that produces the proposal, and its tool definitions | not built. The demo scripts the proposal, so the gate can be shown without a model |
+| the customer facing interface | not built |
+| the proof page, where one decision is inspected | not built. The signed records already arrive in the API's answers and the demo prints them; the page that reads them comes next |
+| the MCP wrapper | not built |
+| the recorded demonstration | not recorded, and it will not be recorded until the flow above works reliably |
 
 ## What this does not do
 

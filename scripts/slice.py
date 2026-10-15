@@ -34,12 +34,34 @@ def load_env(path=".env"):
         os.environ.setdefault(name.strip(), value.strip())
 
 
+def require_credentials():
+    """Stop before printing anything if the live mode cannot run, and point at the offline one.
+
+    The repository is meant to be evaluated in two clearly separate modes: the offline suite,
+    which needs no network and no key, and the live scripts, which need a key issued by the
+    boundary. A key half way through a run is a worse experience than no run.
+    """
+    load_env()
+    if os.environ.get("HUMSANA_API_KEY"):
+        return
+    print("No HUMSANA_API_KEY configured, so the live mode cannot run.\n", file=sys.stderr)
+    print("  offline, no key and no network:   python3 -m unittest discover -s tests -t .",
+          file=sys.stderr)
+    print("  live:                             cp .env.example .env, then put a key in it",
+          file=sys.stderr)
+    print("                                    python3 scripts/issue_key.py --save",
+          file=sys.stderr)
+    print("\nThe key stays on this machine, and no commit in this repository carries one.",
+          file=sys.stderr)
+    raise SystemExit(2)
+
+
 def rule(width=100):
     print("-" * width)
 
 
 def main():
-    load_env()
+    require_credentials()
     action_class = (sys.argv[1] if len(sys.argv) > 1
                     else os.environ.get("DEMO_ACTION_CLASS", "hiring.advance_candidate"))
 

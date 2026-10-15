@@ -24,7 +24,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from humsana_gate import Boundary, BoundaryError   # noqa: E402
-from scripts.slice import load_env                 # noqa: E402
+from scripts.slice import require_credentials      # noqa: E402
 
 NAME = "hiring.advance_candidate"
 
@@ -32,7 +32,7 @@ AUTHORIZED = {
     "candidate": {"id": "cand-7731"},
     "role": {"id": "senior-engineer"},
     "decision": {"value": "advance_to_offer"},
-    "standard": {"id": "sr-engineer-4yr"},
+    "standard": {"id": "senior-bar-4yr"},
     "salary": {"currency": "GBP", "value": 95000},
 }
 
@@ -55,7 +55,7 @@ def set_path(parameters, dotted, value):
 
 
 def main():
-    load_env()
+    require_credentials()
     boundary = Boundary(os.environ.get("HUMSANA_BASE_URL", "https://api.humsana.com"),
                         os.environ.get("HUMSANA_API_KEY"))
 

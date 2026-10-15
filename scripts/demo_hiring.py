@@ -29,7 +29,7 @@ from humsana_gate.boundary import Boundary, BoundaryError     # noqa: E402
 from humsana_gate.gate import (CORRECTED_THEN_EXECUTED,        # noqa: E402
                               RECOMPUTE_REQUIRED, Gate)
 from humsana_gate.store import Store                          # noqa: E402
-from scripts.slice import load_env                            # noqa: E402
+from scripts.slice import require_credentials                 # noqa: E402
 
 ACTION_CLASS = "hiring.advance_candidate"
 LEDGER = os.environ.get("DEMO_LEDGER", "var/ledger.jsonl")
@@ -138,7 +138,7 @@ def run_scenario(gate, store, scenario, index, total):
 
 
 def main():
-    load_env()
+    require_credentials()
     boundary = Boundary(os.environ.get("HUMSANA_BASE_URL", "https://api.humsana.com"),
                         os.environ.get("HUMSANA_API_KEY"))
     store = Store(LEDGER)
