@@ -4,18 +4,26 @@ The boundary does not need these. It takes the action name as a caller supplied 
 compares the parameters field by field, so a new domain is an entry here and no change to the
 gateway's code or to the boundary.
 
-The rule table was measured against the live service (scripts/probe_rule_table.py), not read
-off a document:
+The rule table was measured against the live service, not read off a document. Two scripts do the
+measuring: `scripts/probe_rule_table.py` for one variant per field type, and
+`scripts/authorization_matrix.py` for the whole action.
 
     a number       may not rise      MAY_NOT_INCREASE   it is a ceiling, and may fall
     a list         may add nothing   MAY_ONLY_SHRINK
     anything else  may not change    MAY_NOT_CHANGE     strings, labels, nested keys, currencies
-    a new key at execution           MAY_NOT_GROW
+    a new key at execution           MAY_NOT_GROW       reported at the highest new key
+    a bound key that is absent       MAY_NOT_CHANGE     the final value arrives as None
 
 One consequence decides how an authority must be written. A numeric authority is a ceiling, so
 lowering it is permitted: authorizing `years_minimum: 4` and presenting `3` is not a breach,
 because 3 is below the ceiling. When a value may not move at all, express it as a label rather
-than a number. That is why the hiring standard below is `sr-engineer-4yr` and not `4`.
+than a number. That is why the hiring standard here is `senior-bar-4yr` and not `4`; the matrix
+carries the numeric variant and records what the engine does with it.
+
+Each class also says which of its fields **decide** the action. That is the customer's domain
+knowledge, and it is what stops a corrected payload from standing in for a corrected decision.
+Everything a class does not name is treated as deciding, so nothing unclassified is ever
+substituted by the gate.
 """
 
 from __future__ import annotations
@@ -49,12 +57,25 @@ ACTION_CLASSES = {
             "salary.value": "MAY_NOT_INCREASE",
             "salary.currency": "MAY_NOT_CHANGE",
             "candidate.id": "MAY_NOT_CHANGE",
+            "notify": "MAY_NOT_GROW",
         },
+        # The fields the agent reasoned with. Moving one of these changes the decision, so the
+        # agent decides again rather than having a value substituted underneath it.
+        "decides": ("candidate.id", "role.id", "standard.id", "salary.value", "salary.currency"),
+        # Fields that carry nothing about the decision. An unauthorized one is dropped, which is
+        # a safe correction: it cannot change what the action means.
+        #
+        # Named as the refusal names it. For an unauthorized addition the boundary reports the
+        # highest new key, so an agent adding `notify.channel` is refused on `notify`. That was
+        # measured rather than assumed; scripts/authorization_matrix.py carries the row.
+        "presentation": ("notify",),
         "scenarios": [
             {"label": "the bar is relaxed to one the employer never authorized",
              "change": {"standard.id": "mid-bar-2yr"}},
             {"label": "the offer is priced above the band the employer set",
              "change": {"salary.value": 120000}},
+            {"label": "a notification field the employer never authorized appears",
+             "change": {"notify.channel": "general"}},
         ],
     },
     "ops.reallocate_inventory": {
@@ -75,6 +96,8 @@ ACTION_CLASSES = {
             "from.site": "MAY_NOT_CHANGE",
             "to.site": "MAY_NOT_CHANGE",
         },
+        "decides": ("sku.id", "from.site", "to.site", "units"),
+        "presentation": (),
         "scenarios": [
             {"label": "the agent moves more stock than it was allowed to",
              "change": {"units": 400}},
@@ -100,6 +123,8 @@ ACTION_CLASSES = {
             "revision.sha": "MAY_NOT_CHANGE",
             "replicas": "MAY_NOT_INCREASE",
         },
+        "decides": ("service.name", "environment.name", "revision.sha", "replicas"),
+        "presentation": (),
         "scenarios": [
             {"label": "the change is pointed at production instead of staging",
              "change": {"environment.name": "production"}},
@@ -121,7 +146,10 @@ ACTION_CLASSES = {
         "held_by": {
             "amount.value": "MAY_NOT_INCREASE",
             "account.id": "MAY_NOT_CHANGE",
+            "reason.code": "MAY_NOT_CHANGE",
         },
+        "decides": ("order.id", "account.id", "amount.value", "amount.currency", "reason.code"),
+        "presentation": (),
         "scenarios": [
             {"label": "the refund is issued for more than was allowed",
              "change": {"amount.value": 490}},
@@ -149,8 +177,20 @@ def authorized_action(name: str) -> tuple[str, dict]:
     return entry["authorized"]["name"], copy.deepcopy(entry["authorized"]["parameters"])
 
 
+def field_role(action_class: str, dotted: str) -> str:
+    """"decides" or "presentation". Anything unnamed is unknown, and unknown is never corrected.
+
+    The default is deliberate: a field this gateway has not been told about is treated as one the
+    agent reasoned with, so the gate hands it back rather than substituting a value.
+    """
+    entry = get(action_class)
+    if dotted in entry.get("presentation", ()):
+        return "presentation"
+    return "decides"
+
+
 def apply_scenario(scenario: dict, parameters: dict) -> dict:
-    """The action as a compromised or confused agent proposes it: one bound value moved."""
+    """The action as a compromised or confused agent proposes it: bound values moved."""
     out = copy.deepcopy(parameters)
     for dotted, value in scenario["change"].items():
         legs = dotted.split(".")

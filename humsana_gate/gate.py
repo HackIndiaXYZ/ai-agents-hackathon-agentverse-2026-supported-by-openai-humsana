@@ -2,15 +2,29 @@
 
 The agent may reason, call tools and prepare whatever it likes. The only way an action reaches
 the downstream system is through this object, which asks the boundary twice: once for the
-authority, and once immediately before the write, with the action as it is about to happen.
+authority, and once immediately before the write, with the action as it is about to happen. A
+write happens only on an answer in which the boundary cleared the action and spent the
+authorization, and `store.Clearance` will not accept anything else.
 
-When the boundary refuses and the refusal is repair-shaped, the gate does not stop there. It
-computes the admissible action from the refusal (deterministically, see repair.py), presents
-that against the same authorization, and only writes when the boundary clears it. A refusal
-spends nothing, so the corrected action runs under the authorization the human already gave,
-and the record shows the attempt, the refusal and the correction as one story.
+When the boundary refuses, the gate does not stop. It reads the refusal and splits it:
 
-Nothing here decides anything. It carries the boundary's answer to the store, and it refuses to
+    the drifted field carries nothing about the decision   the gate drops or restores it, presents
+                                                           the admissible action, and writes if that
+                                                           clears. One authorization, two checks.
+
+    the drifted field decides the action                   the gate does NOT substitute a value.
+                                                           It hands the refusal back with the
+                                                           bound, the agent decides again, and the
+                                                           action it produces is checked from
+                                                           scratch on the same receipt.
+
+That second branch is the one that matters. A corrected payload is not a corrected decision: an
+agent that picked the mid-level bar and then has `standard.id` rewritten under it has not changed
+its mind, and a gate that quietly rewrote the field would be laundering the decision while
+reporting a clean check. So the substitution only happens where the class says the field carries
+nothing about the decision, and everywhere else the agent has to do the work.
+
+Nothing here decides anything. It carries the boundary's answer to the store, and refuses to
 carry anything else.
 """
 
@@ -23,7 +37,8 @@ from .boundary import Boundary, BoundaryError
 from .store import Clearance, Store
 
 EXECUTED = "EXECUTED"
-REPAIRED_THEN_EXECUTED = "REPAIRED_THEN_EXECUTED"
+CORRECTED_THEN_EXECUTED = "CORRECTED_THEN_EXECUTED"
+RECOMPUTE_REQUIRED = "RECOMPUTE_REQUIRED"
 REFUSED = "REFUSED"
 
 
@@ -47,6 +62,7 @@ class Outcome:
     authorized: dict
     attempts: list[Attempt] = field(default_factory=list)
     repair: repair.Repair | None = None
+    recompute: tuple = ()
     row: dict | None = None
     note: str = ""
 
@@ -54,10 +70,17 @@ class Outcome:
     def wrote(self) -> bool:
         return self.row is not None
 
+    @property
+    def first_refusal(self) -> dict | None:
+        for attempt in self.attempts:
+            if not attempt.cleared:
+                return attempt.answer
+        return None
+
 
 class Gate:
-    """One instance per action class. `boundary` is anything with the two methods, so the
-    tests can run the whole gate with no network."""
+    """One instance per action class. `boundary` is anything with the two methods, so the tests
+    can run the whole gate with no network."""
 
     def __init__(self, boundary, store: Store, action_class: str, *,
                  actor_id: str = "agent-1", principal_reference: str = "employer:8842"):
@@ -91,6 +114,9 @@ class Gate:
     # ------------------------------------------------------------------- the run
 
     def run(self, proposed: dict, *, note: str = "") -> Outcome:
+        """One authorization, then the agent's proposal. May end at RECOMPUTE_REQUIRED, in which
+        case the agent decides again and offers the new action to `resume` under the same
+        receipt."""
         receipt = self.bind_the_authority()
         receipt_id = receipt.get("receipt_id")
         if not receipt_id:
@@ -98,32 +124,65 @@ class Gate:
                                     "message": "the boundary answered without a receipt id",
                                     "answer": receipt})
         outcome = Outcome(status=REFUSED, receipt_id=receipt_id, authorized=self.authorized)
+        return self._attempt(outcome, proposed, note)
 
-        answer = self.present(receipt_id, proposed)
+    def resume(self, outcome: Outcome, proposed: dict, *, note: str = "") -> Outcome:
+        """The agent has decided again, using the authorized values the refusal named. The new
+        action is checked from scratch, on the same authorization."""
+        if outcome.wrote:
+            raise RuntimeError("this outcome already wrote; that action is done")
+        return self._attempt(outcome, proposed, note)
+
+    def _attempt(self, outcome: Outcome, proposed: dict, note: str) -> Outcome:
+        answer = self.present(outcome.receipt_id, proposed)
         outcome.attempts.append(Attempt(presented=proposed, answer=answer))
+        attempt = outcome.attempts[-1]
 
-        if outcome.attempts[-1].cleared:
-            outcome.status = EXECUTED
-            outcome.row = self.store.write(Clearance.from_answer(answer), proposed, note=note)
-            return outcome
+        if attempt.cleared:
+            return self._write(outcome, proposed, attempt.answer, note)
 
-        outcome.repair = repair.from_refusal(answer, proposed)
+        outcome.repair = repair.from_refusal(
+            answer, proposed,
+            decides=self.entry.get("decides", ()),
+            presentation=self.entry.get("presentation", ()))
+
         if not outcome.repair.repairable:
             outcome.note = outcome.repair.why
             return outcome
 
-        corrected = outcome.repair.admissible
-        second = self.present(receipt_id, corrected)
-        outcome.attempts.append(Attempt(presented=corrected, answer=second))
+        if not outcome.repair.safe_to_apply:
+            # The drifted field decides the action. Substituting the authorized value here would
+            # change the payload without changing the decision behind it, so the gate stops and
+            # hands the work back instead.
+            outcome.status = RECOMPUTE_REQUIRED
+            outcome.recompute = outcome.repair.requires_recompute
+            outcome.note = outcome.repair.why
+            return outcome
 
-        if outcome.attempts[-1].cleared:
-            outcome.status = REPAIRED_THEN_EXECUTED
-            outcome.row = self.store.write(Clearance.from_answer(second), corrected, note=note)
-        else:
-            outcome.note = ("the corrected action was refused too, which is a defect worth "
-                            "reporting rather than a demo")
+        # Every drifted field carries nothing about the decision, so the authorized value is the
+        # only admissible one and presenting it changes nothing the agent meant.
+        corrected = outcome.repair.admissible
+        if corrected is None:  # cannot happen: a repairable refusal always carries one
+            raise RuntimeError("a repairable refusal arrived without an admissible action")
+        second = self.present(outcome.receipt_id, corrected)
+        outcome.attempts.append(Attempt(presented=corrected, answer=second))
+        second_attempt = outcome.attempts[-1]
+
+        if second_attempt.cleared:
+            return self._write(outcome, corrected, second_attempt.answer, note,
+                               status=CORRECTED_THEN_EXECUTED)
+        outcome.note = ("the corrected action was refused too, which is a defect worth reporting "
+                        "rather than a demo")
+        return outcome
+
+    def _write(self, outcome: Outcome, action: dict, answer: dict, note: str,
+               status: str = EXECUTED) -> Outcome:
+        # The only door. Clearance refuses to exist for an answer in which the boundary did not
+        # clear the action and spend the authorization.
+        outcome.row = self.store.write(Clearance.from_answer(answer), action, note=note)
+        outcome.status = status
         return outcome
 
 
-__all__ = ["Gate", "Outcome", "Attempt", "EXECUTED", "REPAIRED_THEN_EXECUTED", "REFUSED",
-           "Boundary", "BoundaryError", "Store"]
+__all__ = ["Gate", "Outcome", "Attempt", "EXECUTED", "CORRECTED_THEN_EXECUTED",
+           "RECOMPUTE_REQUIRED", "REFUSED", "Boundary", "BoundaryError", "Store"]
