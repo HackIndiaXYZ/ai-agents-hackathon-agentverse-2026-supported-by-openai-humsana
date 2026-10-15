@@ -60,21 +60,22 @@ it rather than claiming it.
 ## Action classes
 
 The boundary takes the action name as a caller supplied string and compares the parameters
-field by field. It is not a payments product and not a hiring product: the same rules apply to
-any action you can describe as a name and a set of fields.
+field by field. It is not a payments product and not a hiring product: the same configuration
+works for any action you can describe as a name and a set of fields.
 
 | class | domain | the example action | the value it may not move |
 | --- | --- | --- | --- |
 | `hiring.advance_candidate` | hiring | advance a candidate against the role standard | `standard.id`, the bar the employer named |
-| `ops.reallocate_inventory` | operations | rebalance stock between approved sites | `units`, which may fall but never rise |
+| `ops.reallocate_inventory` | operations | rebalance stock between approved sites | `units` |
 | `infra.deploy_change` | infrastructure | roll a service forward to a reviewed revision | `environment.name` |
 | `commerce.issue_refund` | commerce | refund an order | `amount.value` |
 
-One is wired to the live demo. The rest are a configuration line each, and the gateway code
-does not know which domain it is in.
+One is wired to the live demo. The rest are a configuration line each, and the gate code does not
+know which domain it is in.
 
-Each class also declares which of its fields **decide** the action. That is the customer's domain
-knowledge, and it is what stops a corrected payload from standing in for a corrected decision.
+A class also declares which of its fields decide the action, and the gate treats those differently
+from the rest. That distinction is the customer's domain knowledge, and this integration is written
+to respect it rather than to work around it.
 
 ## Running it, in two modes
 
@@ -88,12 +89,10 @@ Python 3.10 or later.
 python3 -m unittest discover -s tests -t .
 ```
 
-113 tests, all of them about this repository. The boundary is faked, and the fake reproduces the
-live engine's comparison field by field, which is what lets the whole authorization matrix run
-with no network. It covers the gate, the repair and the rule that decides whether the gate may
-apply it, the agent loop from proposal to execution, the ledger invariant, the story a person
-reads, the model proposer's request and response handling, and this repository's own promise that
-it carries no credential.
+113 tests, all of them about this repository. The boundary is faked in the tests, so everything
+below runs with no network and no key: the gate, the agent loop from proposal to execution, the
+ledger invariant, the story a person reads, the model proposer's request and response handling, and
+this repository's own promise that it carries no credential.
 
 That last one is four layers deep, because a public repository means a committed key is a published
 key: key shapes in the tracked files, the same shapes across every commit, and the values of the
@@ -118,7 +117,6 @@ python3 scripts/issue_key.py --save  # asks for a key and writes .env itself, mo
 python3 scripts/slice.py             # the spine: authorize, execute once, refuse a move
 python3 scripts/demo_hiring.py       # the whole story, live, all three shapes of drift
 python3 scripts/authorization_matrix.py   # the matrix, expected against measured
-python3 scripts/probe_rule_table.py       # the rule table, one variant per field type
 python3 scripts/demo_agent.py             # the agent, the gate and the record, end to end
 python3 scripts/demo_agent.py --proposer openai   # the same loop, with the model proposing
 ```
@@ -282,43 +280,22 @@ screen cannot leak the boundary's internal vocabulary at a customer.
 
 ## When it refuses, the agent does not have to stop
 
-A refusal names the field, both values and the rule, which is everything needed to compute what
-may be presented instead. That computation is deterministic: the rule names the field and the
-field has one authorized value. No model is involved, and the repair can only ever narrow. For
-each drifted field `repair.py` publishes the bound:
+A refusal states what may be presented instead, and the gate reads that statement from the
+boundary's own answer. Nothing here decides anything: it can only ever narrow what the agent may
+present, and a corrected action still has to clear the boundary before a byte is written.
 
-| the rule | the bound it publishes |
-| --- | --- |
-| `MAY_NOT_CHANGE` | `equals` the authorized value |
-| `MAY_NOT_INCREASE` | `at_most` the authorized value |
-| `MAY_ONLY_SHRINK` | `subset_of` the authorized list |
-| `MAY_NOT_GROW` | `must_be_absent` |
+## What happens after a refusal
 
 A refusal spends nothing, so a corrected action runs under the authorization the human already
 gave, and the record shows the attempt, the refusal and the correction as one story.
 
-## What happens after a refusal
-
-The refusal says what may be presented instead. Computed from the boundary's own answer, with no
-model in the path and no widening: the rule names the field and the field has one authorized
-value. `repair.py` publishes the bound for each drifted field:
-
-| the rule | the bound it publishes |
-| --- | --- |
-| `MAY_NOT_CHANGE` | `equals` the authorized value |
-| `MAY_NOT_INCREASE` | `at_most` the authorized value |
-| `MAY_ONLY_SHRINK` | `subset_of` the authorized list |
-| `MAY_NOT_GROW` | `must_be_absent`, the field was never authorized |
-
-Knowing the bound is not the same as being allowed to apply it. A corrected payload is not a
-corrected decision: an agent that evaluated a candidate against the mid-level bar still did that,
-whatever the payload says afterwards, and a gate that rewrote the field for it would be laundering
-the decision while reporting a clean check. So the gate splits the refusal in two:
+The gate then splits the refusal according to the action class, and the split is what keeps this an
+integration rather than a convenient way to make refusals go away:
 
 | what drifted | what the gate does |
 | --- | --- |
-| a field the action class **explicitly declares safe to change**, because it carries nothing about the decision | drops or restores that field only, presents the admissible action, and writes if that clears. One authorization, two checks. |
-| anything else, whether the class names it or not | substitutes nothing. The agent must recompute its proposal with the authorized value, and the gate checks the new proposal independently, from scratch, on the same receipt. |
+| a field the class declares to carry nothing about the decision | drops or restores that field only, presents the admissible action, and writes if that clears. One authorization, two checks. |
+| anything else | substitutes nothing. The agent recomputes its proposal with the value the refusal named, and the gate checks the new proposal independently, from scratch, on the same receipt. |
 
 The live run, both branches:
 
@@ -357,11 +334,10 @@ service and prints what it expected against what came back.
 | a bar bound as a number, presented one year lower | refuse, and it does not |
 | a bar bound as a number, presented one year higher | refuse |
 
-The last two are the same authority written two ways, and they disagree. `4` presented as `6` is
-refused, because a number is a ceiling. `4` presented as `2` clears, because a ceiling has no
-floor: an authority expressed as a number cannot hold a minimum. The script reports that row as a
-known gap rather than hiding it. It is why the hiring standard above is written as a name, and it
-is the one rule the engine is missing.
+The last two are the same authority written two ways, and they disagree: one is refused and the
+other clears. The script reports that row as a known gap rather than hiding it. It is why the
+hiring standard above is bound as a name rather than as a number of years, and it is the one thing
+the engine is missing.
 
 ## The write
 

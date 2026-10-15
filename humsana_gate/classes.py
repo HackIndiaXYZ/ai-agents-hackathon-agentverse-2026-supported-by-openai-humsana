@@ -1,29 +1,20 @@
-"""The action classes this gateway knows how to describe, and the rule table they are held by.
+"""The action classes this gateway knows how to describe, and the rules they are held by.
 
 The boundary does not need these. It takes the action name as a caller supplied string and
 compares the parameters field by field, so a new domain is an entry here and no change to the
 gateway's code or to the boundary.
 
-The rule table was measured against the live service, not read off a document. Two scripts do the
-measuring: `scripts/probe_rule_table.py` for one variant per field type, and
-`scripts/authorization_matrix.py` for the whole action.
+`held_by` names the rule the employer's authority applies to each field, as the boundary reports it
+in a refusal. The labels in `RULE_TABLE` are the same facts in the words a person reads on screen.
 
-    a number       may not rise      MAY_NOT_INCREASE   it is a ceiling, and may fall
-    a list         may add nothing   MAY_ONLY_SHRINK
-    anything else  may not change    MAY_NOT_CHANGE     strings, labels, nested keys, currencies
-    a new key at execution           MAY_NOT_GROW       reported at the highest new key
-    a bound key that is absent       MAY_NOT_CHANGE     the final value arrives as None
+One consequence decides how an authority is written. An authority expressed as a number is a
+ceiling, so lowering it is permitted: authorizing `years_minimum: 4` and presenting `3` is not a
+breach. When a value may not move at all, express it as a label rather than a number. That is why
+the hiring standard here is `senior-bar-4yr` and not `4`; the matrix carries the numeric variant
+and records what the engine does with it.
 
-One consequence decides how an authority must be written. A numeric authority is a ceiling, so
-lowering it is permitted: authorizing `years_minimum: 4` and presenting `3` is not a breach,
-because 3 is below the ceiling. When a value may not move at all, express it as a label rather
-than a number. That is why the hiring standard here is `senior-bar-4yr` and not `4`; the matrix
-carries the numeric variant and records what the engine does with it.
-
-Each class also says which of its fields **decide** the action. That is the customer's domain
-knowledge, and it is what stops a corrected payload from standing in for a corrected decision.
-Everything a class does not name is treated as deciding, so nothing unclassified is ever
-substituted by the gate.
+Each class also says which of its fields decide the action. Everything a class does not name is
+treated as deciding, so nothing unclassified is ever substituted by the gate.
 """
 
 from __future__ import annotations

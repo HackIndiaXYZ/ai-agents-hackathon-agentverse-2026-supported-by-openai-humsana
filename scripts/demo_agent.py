@@ -100,7 +100,7 @@ def main(argv: list[str]) -> int:
         if refusal is not None:
             record = refusal.get("authorization_record") or {}
             print(f"\nthe refusal is a signed record: {refusal.get('code')} "
-                  f"{refusal.get('receipt_id')} issuer {record.get('issuer')} "
+                  f"{refusal.get('receipt_id')} "
                   f"digest {str(record.get('record_digest'))[:24]}")
     for note in getattr(proposer, "notes", []):
         print(f"note: {note}")
